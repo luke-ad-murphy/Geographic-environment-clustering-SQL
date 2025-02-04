@@ -14,3 +14,13 @@ A K-means classification flags hexbins as Rural/Urban/Suburban.
 Example of output across a Greater London area:
 
 <img width="511" alt="image" src="https://github.com/user-attachments/assets/8b285e30-07a5-444a-b362-19378a51066d" />
+
+## Requirements
+Create the segments per the example requires the following data sources:
+- mobile sensor data points (commercially available)
+- buildings data (open source, e.g., OpenStreetMap)
+- roads data (open source, e.g., Ordnance Survey)
+- population data (open source, e.g., WorldPop)
+
+## Code
+The code provided is refernce material rather than ready to use, and illustrates the steps taken to achieve the sample output picture of Greater London, above
