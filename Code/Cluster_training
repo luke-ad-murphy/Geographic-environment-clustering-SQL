@@ -71,7 +71,7 @@ as (
     ,any_value(boundary) as boundary
     ,count(a.da_source_id) as road_count
     ,sum(st_length(a.geometry)) as length_m_of_all_roads
-  from `da-datascience-pt.Asset_data.Asset_roads_GB`a, `my-project.my-dataset.hexbin_classification_aoi_grids` g
+  from `my-project.Asset_data.Asset_roads_GB`a, `my-project.my-dataset.hexbin_classification_aoi_grids` g
   where 1=1
     and st_intersects(a.geometry,g.boundary) 
   group by g.grid_cell_id
@@ -200,7 +200,7 @@ as (
     ,sum(case when function = "MINOR ROAD" then 1 else 0 end) as minor_road_count
     ,sum(case when function = "LOCAL ROAD" then 1 else 0 end) as local_road_count
     ,sum(case when function not in("MOTORWAY","A ROAD","B ROAD","MINOR ROAD","LOCAL ROAD") then 1 else 0 end) as access_roads_count
-  from `da-datascience-pt.Asset_data.Asset_roads_GB`a, `my-project.my-dataset.hexbin_classification_aoi_grids3` g
+  from `my-project.Asset_data.Asset_roads_GB`a, `my-project.my-dataset.hexbin_classification_aoi_grids3` g
   where 1=1
     and st_intersects(a.geometry,g.boundary) 
   group by g.grid_cell_id
@@ -422,7 +422,7 @@ order by centroid_id desc
 -- London
 WITH DEF AS (
         SELECT  *
-        FROM  ML.PREDICT(MODEL `da-datascience-pt.BQML_models.dsca_172_UK_hexbin_clusters_11`,# need to change model name to this
+        FROM  ML.PREDICT(MODEL `my-project.BQML_models.hexbin_clusters_11`,# need to change model name to this
             (SELECT  * FROM  `my-project.my-dataset.hexbin_classification_aoi_London`)
           ))
 
