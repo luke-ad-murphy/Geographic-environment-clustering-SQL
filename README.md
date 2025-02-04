@@ -1,13 +1,27 @@
-# Geographic-environment-clustering-SQL
-Grids on a map are clustered according to their road, building, population and sensor data characteristics
+# Geographic Environment Clustering (SQL)
+
+Grids on a map are clustered based on road, building, population, and sensor data characteristics.
 
 ## Overview
-Map grid (hexbins in this example) classification is required because radio performance is affected by environmental clutter. 
-The presence of buildings (here used a single element of all possible street clutter), and movement and density of network users contribute to mobile network interference. 
-When planning a radio network, the environment is therefore an important factor in the number of cells required to serve and area.
 
-To assist with determing the required cell number, classify grid cells across the UK into categories Rural, Urban or Suburban. 
-A K-means classification flags hexbins as Rural/Urban/Suburban.
+Classification of map grids (hexbins in this example) is important for understanding radio performance, as environmental clutter significantly impacts signal propagation. The presence of buildings, street clutter, and the movement and density of network users all contribute to mobile network interference.
+
+When planning a radio network, environmental factors play a critical role in determining the number of cells required to serve a given area effectively.
+
+## Objective
+
+To optimize network planning, this project classifies grid cells across the UK into three categories: Rural, Urban, and Suburban. Using a K-means clustering algorithm, hexbins are categorized based on their environmental characteristics to aid in estimating the required number of radio cells for optimal coverage and performance.
+
+## Features
+
+-- Environmental Clustering: Uses road, building, population, and sensor data to categorize regions.
+-- Hexbin-Based Classification: Employs hexagonal binning for spatial analysis.
+-- K-Means Algorithm: Performs unsupervised clustering to classify regions into Rural, Urban, and Suburban.
+
+## Use Cases
+- Mobile Network Planning: Estimating the number of cells needed for optimal coverage.
+- Urban Development Analysis: Understanding population density and infrastructure impact.
+- Geospatial Research: Studying environmental clustering and its effects on connectivity.
 
 <img width="869" alt="image" src="https://github.com/user-attachments/assets/ce88ddf2-4d1f-40f9-aac7-392e1c249413" />
 
