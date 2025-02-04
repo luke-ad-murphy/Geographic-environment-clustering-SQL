@@ -11,7 +11,7 @@ SET AOI =
 "POLYGON ((-0.5693720975781389 51.722543249211384,-0.5289293333788407 51.27706691665276,0.2001638323158943 51.22573716922702,0.3405900968960225 51.71558352260578,-0.5693720975781389 51.722543249211384))";
 
 #this filters down  grids used to aoi
-CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids` 
+CREATE OR REPLACE TABLE `my-project.my-dataset.hexbin_classification_aoi_grids` 
 as (
   select 
     grid_cell_id
@@ -19,7 +19,7 @@ as (
     ,resident_count as population
     ,(sum(count_4g)+sum(count_5g) + sum(count_5g_nsa) ) as measurements
     ,any_value(boundary) as boundary
-  from `denseware-prod-1-d7b8.d_denseware_curated_us_prod.t_result_grid_cell` g
+  from `my-project.my-dataset.grid_cell` g
   where 1=1
     and st_within(g.boundary,st_geogfromtext(AOI) )
   group by 
@@ -28,41 +28,41 @@ as (
 );
 
 #pulls all reference grid cells for AOI to fill gaps in the curated result table (when there are no measurements in the grid cell))
-CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids_w_no_measurements` 
+CREATE OR REPLACE TABLE `my-project.my-dataset.hexbin_classification_aoi_grids_w_no_measurements` 
 as (
   select grid_cell_id
     ,st_area(boundary) as area_m2_grid
     ,resident_count as population
     ,0 as measurements # this is because cells w no measurements do not show up in results table
     ,boundary
-  from `denseware-prod-1-d7b8.d_denseware_reference_us_prod.t_denseware_grid_cell` g
+  from `my-project.my-dataset.grid_cell` g
 where 1=1
     and st_within(g.boundary,st_geogfromtext(AOI) )
     ); 
 
 #this removes any grid_cell duplicates we already have
-CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids_w_no_measurements` 
+CREATE OR REPLACE TABLE `my-project.my-dataset.hexbin_classification_aoi_grids_w_no_measurements` 
 as (
   select *
-  from `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids_w_no_measurements` 
+  from `my-project.my-dataset.hexbin_classification_aoi_grids_w_no_measurements` 
   where grid_cell_id not in (
                                   select distinct grid_cell_id
-                                  from `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids` 
+                                  from `my-project.my-dataset.hexbin_classification_aoi_grids` 
                                   ) # this returns only the cells with no measurements to union on later
 ); 
 
 #this combine grids w measurements table and grids w no measurements table
-CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids` 
+CREATE OR REPLACE TABLE `my-project.my-dataset.hexbin_classification_aoi_grids` 
 as (
-    select * from `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids_w_no_measurements` 
+    select * from `my-project.my-dataset.hexbin_classification_aoi_grids_w_no_measurements` 
       union all
-    select * from `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids` 
+    select * from `my-project.my-dataset.hexbin_classification_aoi_grids` 
 );
 
 ############################################### Add in total roads count info ###############################################################################
 
 #this gets count of roads in each hexbin (filters out hexbins with none due to spatial join)
-CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids2` 
+CREATE OR REPLACE TABLE `my-project.my-dataset.hexbin_classification_aoi_grids2` 
 as (
   select grid_cell_id
     ,area_m2_grid 
@@ -71,7 +71,7 @@ as (
     ,any_value(boundary) as boundary
     ,count(a.da_source_id) as road_count
     ,sum(st_length(a.geometry)) as length_m_of_all_roads
-  from `da-datascience-pt.Asset_data.Asset_roads_GB`a, `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids` g
+  from `da-datascience-pt.Asset_data.Asset_roads_GB`a, `my-project.my-dataset.hexbin_classification_aoi_grids` g
   where 1=1
     and st_intersects(a.geometry,g.boundary) 
   group by g.grid_cell_id
@@ -81,7 +81,7 @@ as (
 );
 
 #left joins to return all grids from original AOI (even those w no measurements)
-CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids2` 
+CREATE OR REPLACE TABLE `my-project.my-dataset.hexbin_classification_aoi_grids2` 
 as (
   select 
     a.grid_cell_id
@@ -91,8 +91,8 @@ as (
     ,any_value(a.boundary) as boundary
     ,case when b.road_count is null then 0 else b.road_count end as road_count
     ,case when b.length_m_of_all_roads is null then 0 else b.length_m_of_all_roads end as length_m_of_all_roads
-  from `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids` a 
-  left join `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids2` b on a.grid_cell_id = b.grid_cell_id
+  from `my-project.my-dataset.hexbin_classification_aoi_grids` a 
+  left join `my-project.my-dataset.hexbin_classification_aoi_grids2` b on a.grid_cell_id = b.grid_cell_id
   group by 
     a.grid_cell_id
     ,a.area_m2_grid 
@@ -104,23 +104,23 @@ as (
 ################################# add in buildings info ########################################################## 
 
 #this filters buildings to aoi, and also gets building height
-CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_buildings` 
+CREATE OR REPLACE TABLE `my-project.my-dataset.hexbin_classification_aoi_buildings` 
 as (
   select building_id
     ,max(stratum_height_metres) as building_height
     ,any_value(area_m2) as area_m2_building
     ,(sum(count_4g)+sum(count_5g) + sum(count_5g_nsa) ) as measurements
     ,any_value(boundary) as boundary
-  from `denseware-prod-1-d7b8.d_denseware_curated_us_prod.t_result_building`
+  from `my-project.my-dataset.t_result_building`
   where 1=1
     and st_within(boundary,st_geogfromtext(AOI) )
   group by building_id
 );
 
-#select * from `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_buildings`  
+#select * from `my-project.my-dataset.hexbin_classification_aoi_buildings`  
 
 #adds in building average height/percentiles/buildings count
-CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids3` 
+CREATE OR REPLACE TABLE `my-project.my-dataset.hexbin_classification_aoi_grids3` 
 as (
   select grid_cell_id
     ,g.area_m2_grid 
@@ -133,7 +133,7 @@ as (
     ,approx_quantiles(area_m2_building, 100) [offset (50)] as building_area_m2_at_50_percentile
     ,approx_quantiles(area_m2_building, 100) [offset (75)] as building_area_m2_at_75_percentile
     ,avg(area_m2_building) as building_area_mean
-  from `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_buildings`a, `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids2` g
+  from `my-project.my-dataset.hexbin_classification_aoi_buildings`a, `my-project.my-dataset.hexbin_classification_aoi_grids2` g
   where 1=1
     and st_intersects(a.boundary,g.boundary) 
   group by g.grid_cell_id
@@ -143,7 +143,7 @@ as (
 );
 
 #left join to ensure all grid cells are returned with building data
-CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids3` 
+CREATE OR REPLACE TABLE `my-project.my-dataset.hexbin_classification_aoi_grids3` 
 as (
   select a.grid_cell_id
     ,a.area_m2_grid 
@@ -158,8 +158,8 @@ as (
     ,building_area_m2_at_50_percentile
     ,building_area_m2_at_75_percentile
     ,building_area_mean
-  from `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids2` a 
-  left join `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids3` b on a.grid_cell_id = b.grid_cell_id
+  from `my-project.my-dataset.hexbin_classification_aoi_grids2` a 
+  left join `my-project.my-dataset.hexbin_classification_aoi_grids3` b on a.grid_cell_id = b.grid_cell_id
   group by 
     a.grid_cell_id
     ,a.area_m2_grid 
@@ -179,7 +179,7 @@ as (
 ################################ add in lower level road detail (count by road type bits) ##################################################
 
 #add in count of buildings to hexbin here######################################
-CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_London` 
+CREATE OR REPLACE TABLE `my-project.my-dataset.hexbin_classification_aoi_London` 
 as (
   select g.grid_cell_id
     ,g.area_m2_grid
@@ -200,7 +200,7 @@ as (
     ,sum(case when function = "MINOR ROAD" then 1 else 0 end) as minor_road_count
     ,sum(case when function = "LOCAL ROAD" then 1 else 0 end) as local_road_count
     ,sum(case when function not in("MOTORWAY","A ROAD","B ROAD","MINOR ROAD","LOCAL ROAD") then 1 else 0 end) as access_roads_count
-  from `da-datascience-pt.Asset_data.Asset_roads_GB`a, `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids3` g
+  from `da-datascience-pt.Asset_data.Asset_roads_GB`a, `my-project.my-dataset.hexbin_classification_aoi_grids3` g
   where 1=1
     and st_intersects(a.geometry,g.boundary) 
   group by g.grid_cell_id
@@ -219,7 +219,7 @@ as (
 );
 
 #left join to return 0 value grid ids 
-CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_London` 
+CREATE OR REPLACE TABLE `my-project.my-dataset.hexbin_classification_aoi_London` 
 as (
   select a.grid_cell_id
     ,a.area_m2_grid
@@ -240,8 +240,8 @@ as (
     ,b.minor_road_count
     ,b.local_road_count
     ,b.access_roads_count
-  from `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids3` a 
-  left join `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_London` b on a.grid_cell_id = b.grid_cell_id
+  from `my-project.my-dataset.hexbin_classification_aoi_grids3` a 
+  left join `my-project.my-dataset.hexbin_classification_aoi_London` b on a.grid_cell_id = b.grid_cell_id
   group by a.grid_cell_id
     ,a.area_m2_grid
     ,a.population
@@ -263,7 +263,7 @@ as (
 );
 
 #this does density calcs and removes nulls/adds flag to show imputed values
-CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_London` 
+CREATE OR REPLACE TABLE `my-project.my-dataset.hexbin_classification_aoi_London` 
 as (
   select grid_cell_id
     ,boundary
@@ -290,7 +290,7 @@ as (
     #,case when minor_road_count is null then 0 else minor_road_count end as minor_road_count                                                    
     #,case when local_road_count is null then 0 else local_road_count end as local_road_count                                                    
     #,case when access_roads_count is null then 0 else access_roads_count end as access_roads_count                                              
-  from `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_London`
+  from `my-project.my-dataset.hexbin_classification_aoi_London`
 );
 
 #INPUT FEATURES ARE READY
@@ -399,9 +399,9 @@ SELECT  CENTROID_ID
 
 FROM    (
         SELECT  *
-        FROM  ML.PREDICT(MODEL `da-datascience-pt.RAJ_sandpit.DSCA_172_UK_hexbin_clusters_default`,
+        FROM  ML.PREDICT(MODEL `my-project.my-dataset.DSCA_172_UK_hexbin_clusters_default`,
             (
-            SELECT  * FROM  `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_London`)
+            SELECT  * FROM  `my-project.my-dataset.hexbin_classification_aoi_London`)
           )
         )
 
@@ -423,7 +423,7 @@ order by centroid_id desc
 WITH DEF AS (
         SELECT  *
         FROM  ML.PREDICT(MODEL `da-datascience-pt.BQML_models.dsca_172_UK_hexbin_clusters_11`,# need to change model name to this
-            (SELECT  * FROM  `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_London`)
+            (SELECT  * FROM  `my-project.my-dataset.hexbin_classification_aoi_London`)
           ))
 
 SELECT  LOND.grid_cell_id
@@ -437,7 +437,7 @@ SELECT  LOND.grid_cell_id
           WHEN DEF.CENTROID_ID IN (6,9) THEN 'RURAL' 
           WHEN DEF.CENTROID_ID IN (2,3,8) THEN 'SUBURBAN' ELSE 'NA' END AS RUS_segment
         
-FROM    `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_London` AS LOND
+FROM    `my-project.my-dataset.hexbin_classification_aoi_London` AS LOND
 LEFT JOIN DEF as DEF ON LOND.grid_cell_id = DEF.grid_cell_id
 ;
 
