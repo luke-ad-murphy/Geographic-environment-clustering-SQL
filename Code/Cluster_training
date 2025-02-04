@@ -1,0 +1,451 @@
+#score new area using hexbin rus classification algorithm
+
+/*===========================*/
+-- classify new aoi
+/*===========================*/
+
+# get input features for RUS RURAL/URBAN/SUBURBAN classification of AOI
+DECLARE AOI STRING;
+SET AOI = 
+#LONDON ONLY
+"POLYGON ((-0.5693720975781389 51.722543249211384,-0.5289293333788407 51.27706691665276,0.2001638323158943 51.22573716922702,0.3405900968960225 51.71558352260578,-0.5693720975781389 51.722543249211384))";
+
+#this filters down  grids used to aoi
+CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids` 
+as (
+  select 
+    grid_cell_id
+    ,any_value(area_m2) as area_m2_grid
+    ,resident_count as population
+    ,(sum(count_4g)+sum(count_5g) + sum(count_5g_nsa) ) as measurements
+    ,any_value(boundary) as boundary
+  from `denseware-prod-1-d7b8.d_denseware_curated_us_prod.t_result_grid_cell` g
+  where 1=1
+    and st_within(g.boundary,st_geogfromtext(AOI) )
+  group by 
+    grid_cell_id
+    ,resident_count
+);
+
+#pulls all reference grid cells for AOI to fill gaps in the curated result table (when there are no measurements in the grid cell))
+CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids_w_no_measurements` 
+as (
+  select grid_cell_id
+    ,st_area(boundary) as area_m2_grid
+    ,resident_count as population
+    ,0 as measurements # this is because cells w no measurements do not show up in results table
+    ,boundary
+  from `denseware-prod-1-d7b8.d_denseware_reference_us_prod.t_denseware_grid_cell` g
+where 1=1
+    and st_within(g.boundary,st_geogfromtext(AOI) )
+    ); 
+
+#this removes any grid_cell duplicates we already have
+CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids_w_no_measurements` 
+as (
+  select *
+  from `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids_w_no_measurements` 
+  where grid_cell_id not in (
+                                  select distinct grid_cell_id
+                                  from `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids` 
+                                  ) # this returns only the cells with no measurements to union on later
+); 
+
+#this combine grids w measurements table and grids w no measurements table
+CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids` 
+as (
+    select * from `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids_w_no_measurements` 
+      union all
+    select * from `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids` 
+);
+
+############################################### Add in total roads count info ###############################################################################
+
+#this gets count of roads in each hexbin (filters out hexbins with none due to spatial join)
+CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids2` 
+as (
+  select grid_cell_id
+    ,area_m2_grid 
+    ,population
+    ,measurements
+    ,any_value(boundary) as boundary
+    ,count(a.da_source_id) as road_count
+    ,sum(st_length(a.geometry)) as length_m_of_all_roads
+  from `da-datascience-pt.Asset_data.Asset_roads_GB`a, `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids` g
+  where 1=1
+    and st_intersects(a.geometry,g.boundary) 
+  group by g.grid_cell_id
+    ,area_m2_grid 
+    ,population
+    ,measurements
+);
+
+#left joins to return all grids from original AOI (even those w no measurements)
+CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids2` 
+as (
+  select 
+    a.grid_cell_id
+    ,a.area_m2_grid 
+    ,case when a.population is null then b.population else a.population end as population
+    ,case when a.measurements is null then b.measurements else a.measurements end as measurements
+    ,any_value(a.boundary) as boundary
+    ,case when b.road_count is null then 0 else b.road_count end as road_count
+    ,case when b.length_m_of_all_roads is null then 0 else b.length_m_of_all_roads end as length_m_of_all_roads
+  from `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids` a 
+  left join `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids2` b on a.grid_cell_id = b.grid_cell_id
+  group by 
+    a.grid_cell_id
+    ,a.area_m2_grid 
+    ,case when a.population is null then b.population else a.population end
+    ,case when a.measurements is null then b.measurements else a.measurements end 
+    ,case when b.road_count is null then 0 else b.road_count end 
+    ,case when b.length_m_of_all_roads is null then 0 else b.length_m_of_all_roads end 
+);
+################################# add in buildings info ########################################################## 
+
+#this filters buildings to aoi, and also gets building height
+CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_buildings` 
+as (
+  select building_id
+    ,max(stratum_height_metres) as building_height
+    ,any_value(area_m2) as area_m2_building
+    ,(sum(count_4g)+sum(count_5g) + sum(count_5g_nsa) ) as measurements
+    ,any_value(boundary) as boundary
+  from `denseware-prod-1-d7b8.d_denseware_curated_us_prod.t_result_building`
+  where 1=1
+    and st_within(boundary,st_geogfromtext(AOI) )
+  group by building_id
+);
+
+#select * from `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_buildings`  
+
+#adds in building average height/percentiles/buildings count
+CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids3` 
+as (
+  select grid_cell_id
+    ,g.area_m2_grid 
+    ,population
+    ,g.measurements
+    ,any_value(g.boundary) as boundary
+    ,count(a.building_id) as building_count
+    ,avg(building_height) as avg_building_height
+    ,approx_quantiles(area_m2_building, 100) [offset (25)] as building_area_m2_at_25_percentile
+    ,approx_quantiles(area_m2_building, 100) [offset (50)] as building_area_m2_at_50_percentile
+    ,approx_quantiles(area_m2_building, 100) [offset (75)] as building_area_m2_at_75_percentile
+    ,avg(area_m2_building) as building_area_mean
+  from `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_buildings`a, `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids2` g
+  where 1=1
+    and st_intersects(a.boundary,g.boundary) 
+  group by g.grid_cell_id
+    ,g.area_m2_grid 
+    ,population
+    ,measurements
+);
+
+#left join to ensure all grid cells are returned with building data
+CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids3` 
+as (
+  select a.grid_cell_id
+    ,a.area_m2_grid 
+    ,a.population
+    ,a.measurements
+    ,any_value(a.boundary) as boundary
+    ,road_count
+    ,length_m_of_all_roads 
+    ,building_count
+    ,avg_building_height
+    ,building_area_m2_at_25_percentile
+    ,building_area_m2_at_50_percentile
+    ,building_area_m2_at_75_percentile
+    ,building_area_mean
+  from `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids2` a 
+  left join `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids3` b on a.grid_cell_id = b.grid_cell_id
+  group by 
+    a.grid_cell_id
+    ,a.area_m2_grid 
+    ,a.population
+    ,a.measurements
+    ,road_count
+    ,length_m_of_all_roads 
+    ,building_count
+    ,avg_building_height
+    ,building_area_m2_at_25_percentile
+    ,building_area_m2_at_50_percentile
+    ,building_area_m2_at_75_percentile
+    ,building_area_mean
+);
+
+
+################################ add in lower level road detail (count by road type bits) ##################################################
+
+#add in count of buildings to hexbin here######################################
+CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_London` 
+as (
+  select g.grid_cell_id
+    ,g.area_m2_grid
+    ,g.population
+    ,g.measurements
+    ,g.avg_building_height
+    ,g.building_area_m2_at_25_percentile
+    ,g.building_area_m2_at_50_percentile
+    ,g.building_area_m2_at_75_percentile
+    ,g.building_area_mean
+    ,any_value(g.boundary) as boundary
+    ,g.building_count
+    ,g.road_count
+    ,g.length_m_of_all_roads
+    ,sum(case when function = "MOTORWAY" then 1 else 0 end) as motorway_count
+    ,sum(case when function = "A ROAD" then 1 else 0 end) as a_road_count
+    ,sum(case when function = "B ROAD" then 1 else 0 end) as b_road_count
+    ,sum(case when function = "MINOR ROAD" then 1 else 0 end) as minor_road_count
+    ,sum(case when function = "LOCAL ROAD" then 1 else 0 end) as local_road_count
+    ,sum(case when function not in("MOTORWAY","A ROAD","B ROAD","MINOR ROAD","LOCAL ROAD") then 1 else 0 end) as access_roads_count
+  from `da-datascience-pt.Asset_data.Asset_roads_GB`a, `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids3` g
+  where 1=1
+    and st_intersects(a.geometry,g.boundary) 
+  group by g.grid_cell_id
+    ,g.area_m2_grid 
+    ,population
+    ,measurements
+    ,avg_building_height
+    ,building_count
+    ,building_area_m2_at_25_percentile
+    ,building_area_m2_at_50_percentile
+    ,building_area_m2_at_75_percentile
+    ,building_area_mean
+    ,g.building_count
+    ,g.road_count 
+    ,g.length_m_of_all_roads
+);
+
+#left join to return 0 value grid ids 
+CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_London` 
+as (
+  select a.grid_cell_id
+    ,a.area_m2_grid
+    ,a.population
+    ,a.measurements
+    ,a.avg_building_height
+    ,a.building_area_m2_at_25_percentile
+    ,a.building_area_m2_at_50_percentile
+    ,a.building_area_m2_at_75_percentile
+    ,a.building_area_mean
+    ,any_value(a.boundary) as boundary
+    ,a.building_count
+    ,a.road_count 
+    ,a.length_m_of_all_roads
+    ,b.motorway_count
+    ,b.a_road_count
+    ,b.b_road_count
+    ,b.minor_road_count
+    ,b.local_road_count
+    ,b.access_roads_count
+  from `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_grids3` a 
+  left join `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_London` b on a.grid_cell_id = b.grid_cell_id
+  group by a.grid_cell_id
+    ,a.area_m2_grid
+    ,a.population
+    ,a.measurements
+    ,a.avg_building_height
+    ,a.building_area_m2_at_25_percentile
+    ,a.building_area_m2_at_50_percentile
+    ,a.building_area_m2_at_75_percentile
+    ,a.building_area_mean
+    ,a.building_count
+    ,a.road_count 
+    ,a.length_m_of_all_roads
+    ,b.motorway_count
+    ,b.a_road_count
+    ,b.b_road_count
+    ,b.minor_road_count
+    ,b.local_road_count
+    ,b.access_roads_count
+);
+
+#this does density calcs and removes nulls/adds flag to show imputed values
+CREATE OR REPLACE TABLE `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_London` 
+as (
+  select grid_cell_id
+    ,boundary
+    ,area_m2_grid
+    ,case when measurements is null then 0 else measurements end as measurements                                                                
+    ,case when (measurements/area_m2_grid) is null then 0 else (measurements/area_m2_grid) end as  measurement_density_m2                       
+    ,case when population is null then 0 else population end as population                                                                      
+    #,case when population is null then 1 else 0 end as population_impute_flag                                                                   
+    ,case when (population/area_m2_grid) is null then 0 else (population/area_m2_grid) end  as population_density_m2                            
+    #,case when (population/area_m2_grid) is null then 1 else 0 end  as population_density_m2_impute_flag                                        
+    ,case when building_count is null then 0 else building_count end as buildings_count                                                               
+    ,case when (building_count/area_m2_grid) is null then 0 else (building_count/area_m2_grid) end as buildings_density_m2                      
+    #,case when building_area_m2_at_25_percentile is null then 0 else building_area_m2_at_25_percentile end as building_area_m2_at_25_percentile 
+    ,case when building_area_m2_at_50_percentile is null then 0 else building_area_m2_at_50_percentile end as building_area_m2_at_50_percentile 
+   #,case when building_area_m2_at_75_percentile is null then 0 else building_area_m2_at_75_percentile end as building_area_m2_at_75_percentile 
+    ,case when building_area_mean is null then 0 else building_area_mean end as building_area_mean                                              
+    #,case when avg_building_height is null then 3 else avg_building_height end as avg_building_height_m #this is how buildings with 1 strata are corrected. This is put here to not affect the average.
+    #,case when avg_building_height is null then 1 else 0 end as avg_building_height_impute_flag                                                 
+    #,case when road_count is null then 0 else road_count end as all_roads_count
+    #,case when length_m_of_all_roads is null then 0 else length_m_of_all_roads end as length_m_of_all_roads                                                                 
+    #,case when motorway_count is null then 0 else motorway_count end as motorway_count                                                          
+    #,case when a_road_count is null then 0 else a_road_count end as a_road_count                                                                
+    #,case when b_road_count is null then 0 else b_road_count end as b_road_count                                                                
+    #,case when minor_road_count is null then 0 else minor_road_count end as minor_road_count                                                    
+    #,case when local_road_count is null then 0 else local_road_count end as local_road_count                                                    
+    #,case when access_roads_count is null then 0 else access_roads_count end as access_roads_count                                              
+  from `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_London`
+);
+
+#INPUT FEATURES ARE READY
+
+############################################################################################################################################end
+############################################################################################################################################end
+############################################################################################################################################end
+############################################################################################################################################end
+
+/*===========================*/
+-- Apply clusters
+/*===========================*/
+
+/*
+-- profile of each cluster for solution where number of candidate clusters were specified (11 clusters)
+SELECT  CENTROID_ID
+        ,count(*) as hexbin_count
+
+        ,AVG(measurement_density_m2) AS MEAS_DENSITY_AVG
+        ,STDDEV(measurement_density_m2) AS MEAS_DENSITY_STDDEV
+        ,MIN(measurement_density_m2) AS MEAS_DENSITY_MIN
+        ,APPROX_QUANTILES(measurement_density_m2, 100)[OFFSET(5)] AS MEAS_DENSITY_5
+        ,APPROX_QUANTILES(measurement_density_m2, 100)[OFFSET(10)] AS MEAS_DENSITY_10
+        ,APPROX_QUANTILES(measurement_density_m2, 100)[OFFSET(25)] AS MEAS_DENSITY_25
+        ,APPROX_QUANTILES(measurement_density_m2, 100)[OFFSET(50)] AS MEAS_DENSITY_50
+        ,APPROX_QUANTILES(measurement_density_m2, 100)[OFFSET(75)] AS MEAS_DENSITY_75
+        ,APPROX_QUANTILES(measurement_density_m2, 100)[OFFSET(90)] AS MEAS_DENSITY_90
+        ,APPROX_QUANTILES(measurement_density_m2, 100)[OFFSET(95)] AS MEAS_DENSITY_95
+        ,MAX(measurement_density_m2) AS MEAS_DENSITY_MAX
+        ##############################################################################
+        ,AVG(measurements) AS MEAS_AVG
+        ,STDDEV(measurements) AS MEAS_STDDEV
+        ,MIN(measurements) AS MEAS_MIN
+        ,APPROX_QUANTILES(measurements, 100)[OFFSET(5)] AS MEAS_5
+        ,APPROX_QUANTILES(measurements, 100)[OFFSET(10)] AS MEAS_10
+        ,APPROX_QUANTILES(measurements, 100)[OFFSET(25)] AS MEAS_25
+        ,APPROX_QUANTILES(measurements, 100)[OFFSET(50)] AS MEAS_50
+        ,APPROX_QUANTILES(measurements, 100)[OFFSET(75)] AS MEAS_75
+        ,APPROX_QUANTILES(measurements, 100)[OFFSET(90)] AS MEAS_90
+        ,APPROX_QUANTILES(measurements, 100)[OFFSET(95)] AS MEAS_95
+        ,MAX(measurements) AS MEAS_MAX
+
+
+
+        ,AVG(population_density_m2) AS POP_DENSITY_AVG
+        ,STDDEV(population_density_m2) AS POP_DENSITY_STDDEV
+        ,MIN(population_density_m2) AS POP_DENSITY_MIN
+        ,APPROX_QUANTILES(population_density_m2, 100)[OFFSET(5)] AS POP_DENSITY_5
+        ,APPROX_QUANTILES(population_density_m2, 100)[OFFSET(10)] AS POP_DENSITY_10
+        ,APPROX_QUANTILES(population_density_m2, 100)[OFFSET(25)] AS POP_DENSITY_25
+        ,APPROX_QUANTILES(population_density_m2, 100)[OFFSET(50)] AS POP_DENSITY_50
+        ,APPROX_QUANTILES(population_density_m2, 100)[OFFSET(75)] AS POP_DENSITY_75
+        ,APPROX_QUANTILES(population_density_m2, 100)[OFFSET(90)] AS POP_DENSITY_90
+        ,APPROX_QUANTILES(population_density_m2, 100)[OFFSET(95)] AS POP_DENSITY_95
+        ,MAX(population_density_m2) AS POP_DENSITY_MAX
+        ###########################################################################
+        ,AVG(population) AS POP_AVG
+        ,STDDEV(population) AS POP_STDDEV
+        ,MIN(population) AS POP_MIN
+        ,APPROX_QUANTILES(population, 100)[OFFSET(5)] AS POP_5
+        ,APPROX_QUANTILES(population, 100)[OFFSET(10)] AS POP_10
+        ,APPROX_QUANTILES(population, 100)[OFFSET(25)] AS POP_25
+        ,APPROX_QUANTILES(population, 100)[OFFSET(50)] AS POP_50
+        ,APPROX_QUANTILES(population, 100)[OFFSET(75)] AS POP_75
+        ,APPROX_QUANTILES(population, 100)[OFFSET(90)] AS POP_90
+        ,APPROX_QUANTILES(population, 100)[OFFSET(95)] AS POP_95
+        ,MAX(population) AS POP_MAX
+
+
+        ,AVG(buildings_density_m2) AS BUILDINGS_COUNT_DENSITY_AVG
+        ,STDDEV(buildings_density_m2) AS BUILDINGS_COUNT_DENSITY_STDDEV
+        ,MIN(buildings_density_m2) AS BUILDINGS_COUNT_DENSITY_MIN
+        ,APPROX_QUANTILES(buildings_density_m2, 100)[OFFSET(5)] AS BUILDINGS_COUNT_DENSITY_5
+        ,APPROX_QUANTILES(buildings_density_m2, 100)[OFFSET(10)] AS BUILDINGS_COUNT_DENSITY_10
+        ,APPROX_QUANTILES(buildings_density_m2, 100)[OFFSET(25)] AS BUILDINGS_COUNT_DENSITY_25
+        ,APPROX_QUANTILES(buildings_density_m2, 100)[OFFSET(50)] AS BUILDINGS_COUNT_DENSITY_50
+        ,APPROX_QUANTILES(buildings_density_m2, 100)[OFFSET(75)] AS BUILDINGS_COUNT_DENSITY_75
+        ,APPROX_QUANTILES(buildings_density_m2, 100)[OFFSET(90)] AS BUILDINGS_COUNT_DENSITY_90
+        ,APPROX_QUANTILES(buildings_density_m2, 100)[OFFSET(95)] AS BUILDINGS_COUNT_DENSITY_95
+        ,MAX(buildings_density_m2) AS BUILDINGS_COUNT_DENSITY_MAX
+        ######################################################################################
+        ,AVG(buildings_count) AS BUILDINGS_COUNT_AVG
+        ,STDDEV(buildings_count) AS BUILDINGS_COUNT_STDDEV
+        ,MIN(buildings_count) AS BUILDINGS_COUNT_MIN
+        ,APPROX_QUANTILES(buildings_count, 100)[OFFSET(5)] AS BUILDINGS_COUNT_5
+        ,APPROX_QUANTILES(buildings_count, 100)[OFFSET(10)] AS BUILDINGS_COUNT_10
+        ,APPROX_QUANTILES(buildings_count, 100)[OFFSET(25)] AS BUILDINGS_COUNT_25
+        ,APPROX_QUANTILES(buildings_count, 100)[OFFSET(50)] AS BUILDINGS_COUNT_50
+        ,APPROX_QUANTILES(buildings_count, 100)[OFFSET(75)] AS BUILDINGS_COUNT_75
+        ,APPROX_QUANTILES(buildings_count, 100)[OFFSET(90)] AS BUILDINGS_COUNT_90
+        ,APPROX_QUANTILES(buildings_count, 100)[OFFSET(95)] AS BUILDINGS_COUNT_95
+        ,MAX(buildings_count) AS BUILDINGS_COUNT_MAX
+
+
+        ,AVG(building_area_m2_at_50_percentile) AS BUILDINGS_MEDIAN_SIZE_AVG
+        ,STDDEV(building_area_m2_at_50_percentile) AS BUILDINGS_MEDIAN_SIZE_STDDEV
+        ,MIN(building_area_m2_at_50_percentile) AS BUILDINGS_MEDIAN_SIZE_MIN
+        ,APPROX_QUANTILES(building_area_m2_at_50_percentile, 100)[OFFSET(5)] AS BUILDINGS_MEDIAN_SIZE_5
+        ,APPROX_QUANTILES(building_area_m2_at_50_percentile, 100)[OFFSET(10)] AS BUILDINGS_MEDIAN_SIZE_10
+        ,APPROX_QUANTILES(building_area_m2_at_50_percentile, 100)[OFFSET(25)] AS BUILDINGS_MEDIAN_SIZE_25
+        ,APPROX_QUANTILES(building_area_m2_at_50_percentile, 100)[OFFSET(50)] AS BUILDINGS_MEDIAN_SIZE_50
+        ,APPROX_QUANTILES(building_area_m2_at_50_percentile, 100)[OFFSET(75)] AS BUILDINGS_MEDIAN_SIZE_75
+        ,APPROX_QUANTILES(building_area_m2_at_50_percentile, 100)[OFFSET(90)] AS BUILDINGS_MEDIAN_SIZE_90
+        ,APPROX_QUANTILES(building_area_m2_at_50_percentile, 100)[OFFSET(95)] AS BUILDINGS_MEDIAN_SIZE_95
+        ,MAX(building_area_m2_at_50_percentile) AS BUILDINGS_MEDIAN_SIZE_MAX
+
+FROM    (
+        SELECT  *
+        FROM  ML.PREDICT(MODEL `da-datascience-pt.RAJ_sandpit.DSCA_172_UK_hexbin_clusters_default`,
+            (
+            SELECT  * FROM  `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_London`)
+          )
+        )
+
+GROUP BY CENTROID_ID
+order by centroid_id desc
+;
+
+*/
+############################################################################################################################################end
+############################################################################################################################################end
+############################################################################################################################################end
+############################################################################################################################################end
+
+/*=========================================*/
+-- Apply RUS grouping and visualise after qgis research
+/*=========================================*/
+
+-- London
+WITH DEF AS (
+        SELECT  *
+        FROM  ML.PREDICT(MODEL `da-datascience-pt.BQML_models.dsca_172_UK_hexbin_clusters_11`,# need to change model name to this
+            (SELECT  * FROM  `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_London`)
+          ))
+
+SELECT  LOND.grid_cell_id
+        ,LOND.boundary
+        ,LOND.measurement_density_m2
+        ,LOND.population_density_m2
+        ,LOND.buildings_density_m2
+        ,LOND.building_area_m2_at_50_percentile
+        ,DEF.CENTROID_ID AS cluster_number
+        ,CASE WHEN DEF.CENTROID_ID IN (1,4,5,7,10,11) THEN 'URBAN'
+          WHEN DEF.CENTROID_ID IN (6,9) THEN 'RURAL' 
+          WHEN DEF.CENTROID_ID IN (2,3,8) THEN 'SUBURBAN' ELSE 'NA' END AS RUS_segment
+        
+FROM    `da-datascience-pt.RAJ_sandpit.hexbin_classification_aoi_London` AS LOND
+LEFT JOIN DEF as DEF ON LOND.grid_cell_id = DEF.grid_cell_id
+;
+
+
+###########################################################################################
+###########################################################################################
+###########################################################################################
+############################## E N D    OF     P R O G R A M ##############################
+###########################################################################################
+###########################################################################################
+###########################################################################################
